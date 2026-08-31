@@ -1,0 +1,197 @@
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <chrono>
+#include <iomanip>
+#include <cstdlib>
+#include <cstdio>
+#include <thread>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+
+unsigned long long funcao_s(unsigned long long n) {
+    unsigned long long contador = 0;
+    while (n != 1) {
+        if (n % 2 == 0) {
+            n = n / 2;
+        } else {
+            n = (3 * n) + 1;
+        }
+        contador++;
+    }
+    return contador;
+}
+
+void executar_trabalho_bloco(unsigned long long start, unsigned long long end) {
+    for (unsigned long long i = start; i <= end; i++) {
+        funcao_s(i);
+    }
+}
+
+void executar_trabalho_ciclico(unsigned long long A, unsigned long long B, unsigned long long W, unsigned long long w) {
+    for (unsigned long long i = A + w; i <= B; i += W) {
+        funcao_s(i);
+    }
+}
+
+void rotina_thread(unsigned long long A, unsigned long long B, unsigned long long W, unsigned long long w, const std::string& particao, unsigned long long tamanho_bloco, double& tempo_saida) {
+    auto inicio = std::chrono::high_resolution_clock::now();
+
+    if (particao == "bloco") {
+        unsigned long long start = A + (w * tamanho_bloco);
+        unsigned long long end = (w == W - 1) ? B : (start + tamanho_bloco - 1);
+        executar_trabalho_bloco(start, end);
+    } else if (particao == "ciclico") {
+        executar_trabalho_ciclico(A, B, W, w);
+    }
+
+    auto fim = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> duracao = fim - inicio;
+    tempo_saida = duracao.count();
+}
+
+int main(int argc, char* argv[]) {
+    if (argc < 7) {
+        std::cerr << "Uso: " << argv[0] << " <A> <B> <W> <modo> <particao> <arquivo_saida>\n";
+        return 1;
+    }
+
+    unsigned long long A = std::stoull(argv[1]);
+    unsigned long long B = std::stoull(argv[2]);
+    unsigned long long W = std::stoull(argv[3]);
+    std::string modo = argv[4];
+    std::string particao = argv[5];
+    std::string arquivo_saida = argv[6];
+
+    unsigned long long L = (B - A) + 1;
+
+    // Cronometragem do tempo total do pai (antes da criação da 1ª unidade)
+    auto inicio_total = std::chrono::high_resolution_clock::now();
+
+    double tempo_min_filho = -1.0;
+    double tempo_max_filho = -1.0;
+    double tempo_agregacao = -1.0;
+
+    // --- EXECUÇÃO SEQUENCIAL (W = 1) ---
+    if (W == 1) {
+        if (particao == "bloco") {
+            executar_trabalho_bloco(A, B);
+        } else {
+            executar_trabalho_ciclico(A, B, 1, 0);
+        }
+    }
+    // --- EXECUÇÃO MODO PROCESSO ---
+    else if (modo == "processo") {
+        unsigned long long tamanho_bloco = L / W;
+
+        for (unsigned long long w = 0; w < W; w++) {
+            pid_t pid = fork();
+
+            if (pid < 0) {
+                std::cerr << "Erro no fork\n";
+                return 1;
+            }
+            else if (pid == 0) {
+                auto inicio_filho = std::chrono::high_resolution_clock::now();
+
+                if (particao == "bloco") {
+                    unsigned long long start = A + (w * tamanho_bloco);
+                    unsigned long long end = (w == W - 1) ? B : (start + tamanho_bloco - 1);
+                    executar_trabalho_bloco(start, end);
+                } else if (particao == "ciclico") {
+                    executar_trabalho_ciclico(A, B, W, w);
+                }
+
+                auto fim_filho = std::chrono::high_resolution_clock::now();
+                std::chrono::duration<double> duracao = fim_filho - inicio_filho;
+
+                std::ofstream arq("parcial_" + std::to_string(w) + ".txt");
+                arq << duracao.count();
+                arq.close();
+                exit(0);
+            }
+        }
+
+        // Aguarda a finalização de todos os filhos
+        for (unsigned long long w = 0; w < W; w++) {
+            wait(NULL);
+        }
+
+        // Inicia a medição do tempo de agregação
+        auto inicio_agreg = std::chrono::high_resolution_clock::now();
+
+        for (unsigned long long w = 0; w < W; w++) {
+            std::string nome_arq = "parcial_" + std::to_string(w) + ".txt";
+            std::ifstream arq(nome_arq);
+            double t_filho;
+
+            if (arq >> t_filho) {
+                if (w == 0) {
+                    tempo_min_filho = t_filho;
+                    tempo_max_filho = t_filho;
+                } else {
+                    if (t_filho < tempo_min_filho) tempo_min_filho = t_filho;
+                    if (t_filho > tempo_max_filho) tempo_max_filho = t_filho;
+                }
+            }
+            arq.close();
+            std::remove(nome_arq.c_str());
+        }
+
+        auto fim_agreg = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> dur_agreg = fim_agreg - inicio_agreg;
+        tempo_agregacao = dur_agreg.count();
+    }
+    // --- EXECUÇÃO MODO THREAD ---
+    else if (modo == "thread") {
+        unsigned long long tamanho_bloco = L / W;
+        std::vector<std::thread> threads;
+        std::vector<double> tempos_threads(W, 0.0);
+
+        for (unsigned long long w = 0; w < W; w++) {
+            threads.push_back(std::thread(rotina_thread, A, B, W, w, std::ref(particao), tamanho_bloco, std::ref(tempos_threads[w])));
+        }
+
+        for (unsigned long long w = 0; w < W; w++) {
+            threads[w].join();
+        }
+
+        // Inicia a medição do tempo de agregação
+        auto inicio_agreg = std::chrono::high_resolution_clock::now();
+
+        tempo_min_filho = tempos_threads[0];
+        tempo_max_filho = tempos_threads[0];
+
+        for (unsigned long long w = 1; w < W; w++) {
+            if (tempos_threads[w] < tempo_min_filho) tempo_min_filho = tempos_threads[w];
+            if (tempos_threads[w] > tempo_max_filho) tempo_max_filho = tempos_threads[w];
+        }
+
+        auto fim_agreg = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> dur_agreg = fim_agreg - inicio_agreg;
+        tempo_agregacao = dur_agreg.count();
+    }
+
+    auto fim_total = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> tempo_total = fim_total - inicio_total;
+
+    // Escrita no arquivo_saida no formato exigido pela Seção 4
+    std::ofstream out(arquivo_saida, std::ios::app);
+    out << std::scientific << std::setprecision(2);
+    out << modo << "," << particao << "," << W << "," << L << "," << tempo_total.count() << ",";
+
+    if (W == 1) {
+        out << "-1,-1,-1\n";
+    } else {
+        out << tempo_max_filho << "," << tempo_min_filho << "," << tempo_agregacao << "\n";
+    }
+
+    out.close();
+
+    return 0;
+}
+
+// matricula 20250028277
+// M = 28277
