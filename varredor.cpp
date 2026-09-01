@@ -25,25 +25,26 @@ unsigned long long funcao_s(unsigned long long n) {
     return contador;
 }
 
-void executa_trabalho_bloco(unsigned long long start, unsigned long long end) {
-    if (start > end) return;
-    //volatile unsigned long long soma_passos = 0;
+unsigned long long executa_trabalho_bloco(unsigned long long start, unsigned long long end) {
+    if (start > end) return 0;
+    unsigned long long soma_passos = 0;
     for (unsigned long long i = start; i <= end; i++) {
-        //soma_passos += funcao_s(i);
-        funcao_s(i);
+        soma_passos += funcao_s(i);
     }
+    return soma_passos;
 }
 
-void executa_trabalho_ciclico(unsigned long long A, unsigned long long B, unsigned long long W, unsigned long long w) {
-    //volatile unsigned long long soma_passos = 0;
+unsigned long long executa_trabalho_ciclico(unsigned long long A, unsigned long long B, unsigned long long W, unsigned long long w) {
+    unsigned long long soma_passos = 0;
     for (unsigned long long i = A + w; i <= B; i += W) {
-        //soma_passos += funcao_s(i);
-        funcao_s(i);
+        soma_passos += funcao_s(i);
     }
+    return soma_passos;
 }
 
-void funcao_thread(unsigned long long A, unsigned long long B, unsigned long long W, unsigned long long w, const std::string& particao, unsigned long long L, double& tempo_saida) {
+void funcao_thread(unsigned long long A, unsigned long long B, unsigned long long W, unsigned long long w, const std::string& particao, unsigned long long L, double& tempo_saida, unsigned long long& soma_saida) {
     auto inicio = std::chrono::high_resolution_clock::now();
+    unsigned long long soma_passos = 0;
 
     if (particao == "bloco") {
         unsigned long long base_bloco = L / W;
@@ -52,14 +53,15 @@ void funcao_thread(unsigned long long A, unsigned long long B, unsigned long lon
         unsigned long long start = A + (w * base_bloco) + std::min(w, resto);
         unsigned long long end = start + tamanho_atual - 1;
 
-        executa_trabalho_bloco(start, end);
+        soma_passos = executa_trabalho_bloco(start, end);
     } else if (particao == "ciclico") {
-        executa_trabalho_ciclico(A, B, W, w);
+        soma_passos = executa_trabalho_ciclico(A, B, W, w);
     }
 
     auto fim = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> duracao = fim - inicio;
     tempo_saida = duracao.count();
+    soma_saida = soma_passos;
 }
 
 int main(int argc, char* argv[]) {
@@ -82,13 +84,15 @@ int main(int argc, char* argv[]) {
     double tempo_min_filho = -1.0;
     double tempo_max_filho = -1.0;
     double tempo_agregacao = -1.0;
+    unsigned long long soma_total = 0;
 
     if (W == 1) {
         if (particao == "bloco") {
-            executa_trabalho_bloco(A, B);
+            soma_total = executa_trabalho_bloco(A, B);
         } else {
-            executa_trabalho_ciclico(A, B, 1, 0);
+            soma_total = executa_trabalho_ciclico(A, B, 1, 0);
         }
+        std::cout << "[Sequencial W=1] Total de passos acumulados: " << soma_total << std::endl;
     }
     else if (modo == "processo") {
         unsigned long long base_bloco = L / W;
@@ -103,22 +107,25 @@ int main(int argc, char* argv[]) {
             }
             else if (pid == 0) {
                 auto inicio_filho = std::chrono::high_resolution_clock::now();
+                unsigned long long soma_passos = 0;
 
                 if (particao == "bloco") {
                     unsigned long long tamanho_atual = base_bloco + (w < resto ? 1 : 0);
                     unsigned long long start = A + (w * base_bloco) + std::min(w, resto);
                     unsigned long long end = start + tamanho_atual - 1;
 
-                    executa_trabalho_bloco(start, end);
+                    soma_passos = executa_trabalho_bloco(start, end);
                 } else if (particao == "ciclico") {
-                    executa_trabalho_ciclico(A, B, W, w);
+                    soma_passos = executa_trabalho_ciclico(A, B, W, w);
                 }
 
                 auto fim_filho = std::chrono::high_resolution_clock::now();
                 std::chrono::duration<double> duracao = fim_filho - inicio_filho;
 
+                std::cout << "[Processo Filho " << w << "] Passos calculados: " << soma_passos << std::endl;
+
                 std::ofstream arq("parcial_" + std::to_string(w) + ".txt");
-                arq << duracao.count();
+                arq << duracao.count() << " " << soma_passos;
                 arq.close();
                 exit(0);
             }
@@ -134,8 +141,10 @@ int main(int argc, char* argv[]) {
             std::string nome_arq = "parcial_" + std::to_string(w) + ".txt";
             std::ifstream arq(nome_arq);
             double t_filho;
+            unsigned long long s_filho;
 
-            if (arq >> t_filho) {
+            if (arq >> t_filho >> s_filho) {
+                soma_total += s_filho;
                 if (w == 0) {
                     tempo_min_filho = t_filho;
                     tempo_max_filho = t_filho;
@@ -151,13 +160,16 @@ int main(int argc, char* argv[]) {
         auto fim_agreg = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> dur_agreg = fim_agreg - inicio_agreg;
         tempo_agregacao = dur_agreg.count();
+
+        std::cout << "[Pai - Processos] Total de passos agregados: " << soma_total << std::endl;
     }
     else if (modo == "thread") {
         std::vector<std::thread> threads;
         std::vector<double> tempos_threads(W, 0.0);
+        std::vector<unsigned long long> somas_threads(W, 0);
 
         for (unsigned long long w = 0; w < W; w++) {
-            threads.push_back(std::thread(funcao_thread, A, B, W, w, std::ref(particao), L, std::ref(tempos_threads[w])));
+            threads.push_back(std::thread(funcao_thread, A, B, W, w, std::ref(particao), L, std::ref(tempos_threads[w]), std::ref(somas_threads[w])));
         }
 
         for (unsigned long long w = 0; w < W; w++) {
@@ -169,7 +181,9 @@ int main(int argc, char* argv[]) {
         tempo_min_filho = tempos_threads[0];
         tempo_max_filho = tempos_threads[0];
 
-        for (unsigned long long w = 1; w < W; w++) {
+        for (unsigned long long w = 0; w < W; w++) {
+            soma_total += somas_threads[w];
+            std::cout << "[Thread " << w << "] Passos calculados: " << somas_threads[w] << std::endl;
             if (tempos_threads[w] < tempo_min_filho) tempo_min_filho = tempos_threads[w];
             if (tempos_threads[w] > tempo_max_filho) tempo_max_filho = tempos_threads[w];
         }
@@ -177,6 +191,8 @@ int main(int argc, char* argv[]) {
         auto fim_agreg = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> dur_agreg = fim_agreg - inicio_agreg;
         tempo_agregacao = dur_agreg.count();
+
+        std::cout << "[Pai - Threads] Total de passos agregados: " << soma_total << std::endl;
     }
 
     auto fim_total = std::chrono::high_resolution_clock::now();
