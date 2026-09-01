@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <thread>
+#include <algorithm>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -24,27 +25,32 @@ unsigned long long funcao_s(unsigned long long n) {
     return contador;
 }
 
-void executar_trabalho_bloco(unsigned long long start, unsigned long long end) {
+void executa_trabalho_bloco(unsigned long long start, unsigned long long end) {
+    if (start > end) return;
     for (unsigned long long i = start; i <= end; i++) {
         funcao_s(i);
     }
 }
 
-void executar_trabalho_ciclico(unsigned long long A, unsigned long long B, unsigned long long W, unsigned long long w) {
+void executa_trabalho_ciclico(unsigned long long A, unsigned long long B, unsigned long long W, unsigned long long w) {
     for (unsigned long long i = A + w; i <= B; i += W) {
         funcao_s(i);
     }
 }
 
-void rotina_thread(unsigned long long A, unsigned long long B, unsigned long long W, unsigned long long w, const std::string& particao, unsigned long long tamanho_bloco, double& tempo_saida) {
+void funcao_thread(unsigned long long A, unsigned long long B, unsigned long long W, unsigned long long w, const std::string& particao, unsigned long long L, double& tempo_saida) {
     auto inicio = std::chrono::high_resolution_clock::now();
 
     if (particao == "bloco") {
-        unsigned long long start = A + (w * tamanho_bloco);
-        unsigned long long end = (w == W - 1) ? B : (start + tamanho_bloco - 1);
-        executar_trabalho_bloco(start, end);
+        unsigned long long base_bloco = L / W;
+        unsigned long long resto = L % W;
+        unsigned long long tamanho_atual = base_bloco + (w < resto ? 1 : 0);
+        unsigned long long start = A + (w * base_bloco) + std::min(w, resto);
+        unsigned long long end = start + tamanho_atual - 1;
+
+        executa_trabalho_bloco(start, end);
     } else if (particao == "ciclico") {
-        executar_trabalho_ciclico(A, B, W, w);
+        executa_trabalho_ciclico(A, B, W, w);
     }
 
     auto fim = std::chrono::high_resolution_clock::now();
@@ -67,24 +73,22 @@ int main(int argc, char* argv[]) {
 
     unsigned long long L = (B - A) + 1;
 
-    // Cronometragem do tempo total do pai (antes da criação da 1ª unidade)
     auto inicio_total = std::chrono::high_resolution_clock::now();
 
     double tempo_min_filho = -1.0;
     double tempo_max_filho = -1.0;
     double tempo_agregacao = -1.0;
 
-    // --- EXECUÇÃO SEQUENCIAL (W = 1) ---
     if (W == 1) {
         if (particao == "bloco") {
-            executar_trabalho_bloco(A, B);
+            executa_trabalho_bloco(A, B);
         } else {
-            executar_trabalho_ciclico(A, B, 1, 0);
+            executa_trabalho_ciclico(A, B, 1, 0);
         }
     }
-    // --- EXECUÇÃO MODO PROCESSO ---
     else if (modo == "processo") {
-        unsigned long long tamanho_bloco = L / W;
+        unsigned long long base_bloco = L / W;
+        unsigned long long resto = L % W;
 
         for (unsigned long long w = 0; w < W; w++) {
             pid_t pid = fork();
@@ -97,11 +101,13 @@ int main(int argc, char* argv[]) {
                 auto inicio_filho = std::chrono::high_resolution_clock::now();
 
                 if (particao == "bloco") {
-                    unsigned long long start = A + (w * tamanho_bloco);
-                    unsigned long long end = (w == W - 1) ? B : (start + tamanho_bloco - 1);
-                    executar_trabalho_bloco(start, end);
+                    unsigned long long tamanho_atual = base_bloco + (w < resto ? 1 : 0);
+                    unsigned long long start = A + (w * base_bloco) + std::min(w, resto);
+                    unsigned long long end = start + tamanho_atual - 1;
+
+                    executa_trabalho_bloco(start, end);
                 } else if (particao == "ciclico") {
-                    executar_trabalho_ciclico(A, B, W, w);
+                    executa_trabalho_ciclico(A, B, W, w);
                 }
 
                 auto fim_filho = std::chrono::high_resolution_clock::now();
@@ -114,12 +120,10 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Aguarda a finalização de todos os filhos
         for (unsigned long long w = 0; w < W; w++) {
             wait(NULL);
         }
 
-        // Inicia a medição do tempo de agregação
         auto inicio_agreg = std::chrono::high_resolution_clock::now();
 
         for (unsigned long long w = 0; w < W; w++) {
@@ -144,21 +148,18 @@ int main(int argc, char* argv[]) {
         std::chrono::duration<double> dur_agreg = fim_agreg - inicio_agreg;
         tempo_agregacao = dur_agreg.count();
     }
-    // --- EXECUÇÃO MODO THREAD ---
     else if (modo == "thread") {
-        unsigned long long tamanho_bloco = L / W;
         std::vector<std::thread> threads;
         std::vector<double> tempos_threads(W, 0.0);
 
         for (unsigned long long w = 0; w < W; w++) {
-            threads.push_back(std::thread(rotina_thread, A, B, W, w, std::ref(particao), tamanho_bloco, std::ref(tempos_threads[w])));
+            threads.push_back(std::thread(funcao_thread, A, B, W, w, std::ref(particao), L, std::ref(tempos_threads[w])));
         }
 
         for (unsigned long long w = 0; w < W; w++) {
             threads[w].join();
         }
 
-        // Inicia a medição do tempo de agregação
         auto inicio_agreg = std::chrono::high_resolution_clock::now();
 
         tempo_min_filho = tempos_threads[0];
@@ -177,7 +178,6 @@ int main(int argc, char* argv[]) {
     auto fim_total = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> tempo_total = fim_total - inicio_total;
 
-    // Escrita no arquivo_saida no formato exigido pela Seção 4
     std::ofstream out(arquivo_saida, std::ios::app);
     out << std::scientific << std::setprecision(2);
     out << modo << "," << particao << "," << W << "," << L << "," << tempo_total.count() << ",";
