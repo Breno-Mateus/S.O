@@ -27,16 +27,18 @@ unsigned long long funcao_s(unsigned long long n) {
 
 void executa_trabalho_bloco(unsigned long long start, unsigned long long end) {
     if (start > end) return;
-    volatile unsigned long long soma_passos = 0;
+    //volatile unsigned long long soma_passos = 0;
     for (unsigned long long i = start; i <= end; i++) {
-        soma_passos += funcao_s(i);
+        //soma_passos += funcao_s(i);
+        funcao_s(i);
     }
 }
 
 void executa_trabalho_ciclico(unsigned long long A, unsigned long long B, unsigned long long W, unsigned long long w) {
-    volatile unsigned long long soma_passos = 0;
+    //volatile unsigned long long soma_passos = 0;
     for (unsigned long long i = A + w; i <= B; i += W) {
-        soma_passos += funcao_s(i);
+        //soma_passos += funcao_s(i);
+        funcao_s(i);
     }
 }
 
