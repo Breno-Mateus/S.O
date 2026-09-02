@@ -215,3 +215,4 @@ int main(int argc, char* argv[]) {
 
 // matricula 20250028277
 // M = 28277
+// ./varredor <A> <B> <W> <modo> <particao> <arquivo_saida>
